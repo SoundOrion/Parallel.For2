@@ -575,3 +575,484 @@ class Program
 ---
 
 他にやりたいこと、例えば「サイズじゃなくて件数でグループ化したい」とか「ZIP圧縮したい」とかあったら、それもすぐ加えられるよ！どう？試してみる？
+
+
+
+OK！つまり、  
+一時フォルダを `"C:\TempWork\GUID"` みたいに作るんじゃなくて、  
+**固定で `"C:\Source_01"`, `"C:\Source_02"`…と番号付きで作成＆使い回す** ってことね 👍
+
+---
+
+## ✅ 更新ポイント
+
+| 項目 | 変更内容 |
+|------|----------|
+| フォルダ名       | `"C:\Source_01"`, `"C:\Source_02"` などに変更（インデックス付き）  
+| 再利用のため削除 | 実行前に前回の `"C:\Source_XX"` を削除してクリーン状態にする  
+| グループごとに割り当て | `GroupFilesBySize` で分けたグループに1:1で対応するように作成
+
+---
+
+## 🔁 更新されたコードの該当部分（コンソール版）
+
+以下、差分だけ紹介 → フルコード必要ならあとで統合します！
+
+---
+
+### 🔧 フォルダ名を `"C:\Source_01"` 形式で作成
+
+```csharp
+// 実行前：旧フォルダをクリーンアップして、新しく作る
+void PrepareTempFolders(int groupCount)
+{
+    for (int i = 1; i <= groupCount; i++)
+    {
+        string path = $@"C:\Source_{i:D2}";
+
+        if (Directory.Exists(path))
+            Directory.Delete(path, true);
+
+        Directory.CreateDirectory(path);
+    }
+}
+```
+
+---
+
+### 🧩 実行時のメイン処理の変更点
+
+```csharp
+PrepareTempFolders(groups.Count);
+
+await Task.Run(() =>
+{
+    Parallel.ForEach(groups.Select((group, index) => (group, index)), new ParallelOptions
+    {
+        CancellationToken = cts.Token
+    }, item =>
+    {
+        var group = item.group;
+        int index = item.index;
+
+        string tempFolder = $@"C:\Source_{index + 1:D2}";
+        Directory.CreateDirectory(tempFolder); // 念のため
+
+        try
+        {
+            foreach (var file in group)
+            {
+                string dest = Path.Combine(tempFolder, Path.GetFileName(file));
+                File.Move(file, dest);
+            }
+
+            ProcessFolder(tempFolder, cts.Token);
+
+            foreach (var file in Directory.GetFiles(tempFolder))
+            {
+                string dest = Path.Combine(sourceFolder, Path.GetFileName(file));
+                File.Move(file, dest);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"エラー: {ex.Message}");
+        }
+        finally
+        {
+            int done = Interlocked.Increment(ref progress);
+            Console.WriteLine($"進捗: {done}/{groups.Count}");
+        }
+    });
+});
+```
+
+---
+
+### 👀 補足ポイント
+
+- `Source_01`, `Source_02` のように **明示的にわかりやすいフォルダ名**を作れる
+- `PrepareTempFolders()` によって **毎回クリーンに再生成**されるので安全
+- グループ数に応じてフォルダが1:1で生成される
+
+---
+
+## ✅ フォルダ構成イメージ
+
+```
+C:\Source             ← 元のファイルが最初に入っている
+C:\Source_01          ← グループ1（処理中に使う）
+C:\Source_02          ← グループ2
+C:\Source_03          ← グループ3
+...
+```
+
+---
+
+## ✅ 最終的にどうなるか
+
+- 元ファイル群をサイズごとに分割
+- 各グループを `Source_01`, `Source_02`... に移動
+- 並列に処理
+- 処理後にファイルを元に戻す
+- 一時フォルダ（`Source_XX`）は空になる（or削除してもOK）
+
+---
+
+## 👉 次どうする？
+
+- この差分を含めた**フルのコンソールコード**出す？
+- もしくはこのまま**WPFに移植**する？
+- `ProcessFolder` を何か特定の処理にしたい？
+
+どこからでもOK！言ってくれたらすぐ対応するよ💪
+
+
+
+よっしゃ！じゃあまずは…
+
+---
+
+# ✅① コンソールアプリ版（差分含むフルコード）
+
+---
+
+```csharp
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+
+class Program
+{
+    static readonly string sourceFolder = @"C:\Source";
+    static readonly string tempFolderFormat = @"C:\Source_{0:D2}";
+    static readonly long maxGroupSize = 100 * 1024 * 1024; // 100MB
+
+    static async Task Main(string[] args)
+    {
+        if (!Directory.Exists(sourceFolder))
+        {
+            Console.WriteLine("元フォルダが存在しません。");
+            return;
+        }
+
+        Console.WriteLine("処理を開始します。キャンセルするには Ctrl+C を押してください。");
+
+        using var cts = new CancellationTokenSource();
+
+        Console.CancelKeyPress += (s, e) =>
+        {
+            Console.WriteLine("キャンセル要求されました...");
+            cts.Cancel();
+            e.Cancel = true;
+        };
+
+        try
+        {
+            var files = Directory.GetFiles(sourceFolder);
+            var groups = GroupFilesBySize(files, maxGroupSize);
+
+            PrepareTempFolders(groups.Count);
+
+            int total = groups.Count;
+            int progress = 0;
+
+            await Task.Run(() =>
+            {
+                Parallel.ForEach(groups.Select((group, index) => (group, index)), new ParallelOptions
+                {
+                    CancellationToken = cts.Token
+                }, item =>
+                {
+                    var group = item.group;
+                    int index = item.index;
+
+                    string tempFolder = string.Format(tempFolderFormat, index + 1);
+                    Directory.CreateDirectory(tempFolder); // 念のため
+
+                    try
+                    {
+                        // 移動
+                        foreach (var file in group)
+                        {
+                            string dest = Path.Combine(tempFolder, Path.GetFileName(file));
+                            File.Move(file, dest);
+                        }
+
+                        // 任意処理
+                        ProcessFolder(tempFolder, cts.Token);
+
+                        // 元に戻す
+                        foreach (var file in Directory.GetFiles(tempFolder))
+                        {
+                            string dest = Path.Combine(sourceFolder, Path.GetFileName(file));
+                            File.Move(file, dest);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"エラー: {ex.Message}");
+                    }
+                    finally
+                    {
+                        int done = Interlocked.Increment(ref progress);
+                        Console.WriteLine($"進捗: {done}/{total}");
+                    }
+                });
+            });
+
+            Console.WriteLine("すべての処理が完了しました！");
+        }
+        catch (OperationCanceledException)
+        {
+            Console.WriteLine("キャンセルされました。");
+        }
+    }
+
+    static List<List<string>> GroupFilesBySize(string[] files, long maxSize)
+    {
+        var result = new List<List<string>>();
+        var currentGroup = new List<string>();
+        long currentSize = 0;
+
+        foreach (var file in files.OrderBy(f => new FileInfo(f).Length))
+        {
+            long size = new FileInfo(file).Length;
+
+            if (currentSize + size > maxSize && currentGroup.Count > 0)
+            {
+                result.Add(currentGroup);
+                currentGroup = new List<string>();
+                currentSize = 0;
+            }
+
+            currentGroup.Add(file);
+            currentSize += size;
+        }
+
+        if (currentGroup.Count > 0)
+            result.Add(currentGroup);
+
+        return result;
+    }
+
+    static void PrepareTempFolders(int groupCount)
+    {
+        for (int i = 1; i <= groupCount; i++)
+        {
+            string path = string.Format(tempFolderFormat, i);
+            if (Directory.Exists(path))
+                Directory.Delete(path, true);
+
+            Directory.CreateDirectory(path);
+        }
+    }
+
+    static void ProcessFolder(string folderPath, CancellationToken token)
+    {
+        foreach (var file in Directory.GetFiles(folderPath))
+        {
+            token.ThrowIfCancellationRequested();
+            Console.WriteLine($"  処理中: {Path.GetFileName(file)}");
+            Thread.Sleep(100); // 重い処理の代用
+        }
+    }
+}
+```
+
+---
+
+# ✅② WPFアプリ版（上記と同じ処理をUI付きで）
+
+---
+
+## 📄 MainWindow.xaml
+
+```xml
+<Window x:Class="WpfBatchFileProcessor.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        Title="WPFファイルバッチ処理" Height="200" Width="400">
+    <StackPanel Margin="10">
+        <ProgressBar x:Name="ProgressBar" Height="25" Minimum="0" Margin="0,0,0,10"/>
+        <Button x:Name="StartButton" Content="開始" Click="StartButton_Click" Margin="0,0,0,5"/>
+        <Button x:Name="CancelButton" Content="キャンセル" Click="CancelButton_Click" IsEnabled="False"/>
+    </StackPanel>
+</Window>
+```
+
+---
+
+## 📄 MainWindow.xaml.cs
+
+```csharp
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows;
+
+namespace WpfBatchFileProcessor
+{
+    public partial class MainWindow : Window
+    {
+        private CancellationTokenSource _cts;
+        private int _progress = 0;
+
+        private readonly string sourceFolder = @"C:\Source";
+        private readonly string tempFolderFormat = @"C:\Source_{0:D2}";
+        private readonly long maxGroupSize = 100 * 1024 * 1024;
+
+        public MainWindow()
+        {
+            InitializeComponent();
+        }
+
+        private async void StartButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (!Directory.Exists(sourceFolder))
+            {
+                MessageBox.Show("元フォルダが存在しません。");
+                return;
+            }
+
+            StartButton.IsEnabled = false;
+            CancelButton.IsEnabled = true;
+            _progress = 0;
+            ProgressBar.Value = 0;
+
+            _cts = new CancellationTokenSource();
+
+            var files = Directory.GetFiles(sourceFolder);
+            var groups = GroupFilesBySize(files, maxGroupSize);
+            ProgressBar.Maximum = groups.Count;
+
+            PrepareTempFolders(groups.Count);
+
+            try
+            {
+                await Task.Run(() =>
+                {
+                    Parallel.ForEach(groups.Select((group, index) => (group, index)), new ParallelOptions
+                    {
+                        CancellationToken = _cts.Token
+                    }, item =>
+                    {
+                        var group = item.group;
+                        int index = item.index;
+
+                        string tempFolder = string.Format(tempFolderFormat, index + 1);
+                        Directory.CreateDirectory(tempFolder);
+
+                        try
+                        {
+                            foreach (var file in group)
+                            {
+                                string dest = Path.Combine(tempFolder, Path.GetFileName(file));
+                                File.Move(file, dest);
+                            }
+
+                            ProcessFolder(tempFolder, _cts.Token);
+
+                            foreach (var file in Directory.GetFiles(tempFolder))
+                            {
+                                string dest = Path.Combine(sourceFolder, Path.GetFileName(file));
+                                File.Move(file, dest);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Dispatcher.Invoke(() => MessageBox.Show($"エラー: {ex.Message}"));
+                        }
+                        finally
+                        {
+                            int done = Interlocked.Increment(ref _progress);
+                            Dispatcher.Invoke(() => ProgressBar.Value = done);
+                        }
+                    });
+                });
+
+                MessageBox.Show("完了しました！");
+            }
+            catch (OperationCanceledException)
+            {
+                MessageBox.Show("キャンセルされました。");
+            }
+            finally
+            {
+                StartButton.IsEnabled = true;
+                CancelButton.IsEnabled = false;
+            }
+        }
+
+        private void CancelButton_Click(object sender, RoutedEventArgs e)
+        {
+            _cts?.Cancel();
+        }
+
+        private List<List<string>> GroupFilesBySize(string[] files, long maxSize)
+        {
+            var result = new List<List<string>>();
+            var currentGroup = new List<string>();
+            long currentSize = 0;
+
+            foreach (var file in files.OrderBy(f => new FileInfo(f).Length))
+            {
+                long size = new FileInfo(file).Length;
+
+                if (currentSize + size > maxSize && currentGroup.Count > 0)
+                {
+                    result.Add(currentGroup);
+                    currentGroup = new List<string>();
+                    currentSize = 0;
+                }
+
+                currentGroup.Add(file);
+                currentSize += size;
+            }
+
+            if (currentGroup.Count > 0)
+                result.Add(currentGroup);
+
+            return result;
+        }
+
+        private void PrepareTempFolders(int groupCount)
+        {
+            for (int i = 1; i <= groupCount; i++)
+            {
+                string path = string.Format(tempFolderFormat, i);
+                if (Directory.Exists(path))
+                    Directory.Delete(path, true);
+                Directory.CreateDirectory(path);
+            }
+        }
+
+        private void ProcessFolder(string folderPath, CancellationToken token)
+        {
+            foreach (var file in Directory.GetFiles(folderPath))
+            {
+                token.ThrowIfCancellationRequested();
+                Thread.Sleep(100); // 仮の重い処理
+            }
+        }
+    }
+}
+```
+
+---
+
+## 🧠 完全理解へ！
+
+- コンソールで流れ＆仕組みを把握 ✅  
+- WPFで非同期・UI連携を体感 ✅  
+- 処理本体（`ProcessFolder`）を差し替えて本番対応へ ✅
+
+---
+
+さらに「エラーログ保存したい」「処理結果を一覧で見たい」などもどんどん足せる！  
+やってみて詰まったとこあったら、いつでも聞いて！🔥
