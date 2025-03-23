@@ -434,3 +434,135 @@ foreach (var info in fileSizeInfos)
 要件に応じてスイッチできるようにするのもアリだね！
 
 必要なら「両対応できるように切り替えフラグ付きで書く」パターンも用意できるよ👌
+
+
+
+        // ファイル一覧を取得（ここでは一度だけ取得して使い回す）
+        var files = Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories).ToArray();
+
+        Console.WriteLine($"Total files: {files.Length}");
+        Console.WriteLine();
+
+        // Stopwatch
+        var sw = new Stopwatch();
+
+        // 1️⃣ string[] バージョン
+        sw.Start();
+        var result1 = GroupFilesBySize_Array(files, maxSize);
+        sw.Stop();
+        Console.WriteLine($"Array version: {sw.Elapsed.TotalSeconds:F2} seconds");
+        sw.Reset();
+
+        // 2️⃣ IEnumerable バージョン
+        sw.Start();
+        var result2 = GroupFilesBySize_Enumerable(files, maxSize);
+        sw.Stop();
+        Console.WriteLine($"IEnumerable version: {sw.Elapsed.TotalSeconds:F2} seconds");
+        sw.Reset();
+
+        // 3️⃣ 並列処理バージョン
+        sw.Start();
+        var result3 = GroupFilesBySize_ParallelSmart(files, maxSize);
+        sw.Stop();
+        Console.WriteLine($"Parallel version: {sw.Elapsed.TotalSeconds:F2} seconds");
+
+        Console.WriteLine("\nDone.");
+    }
+
+    static List<List<string>> GroupFilesBySize_Array(string[] files, long maxSize)
+    {
+        var result = new List<List<string>>();
+        var currentGroup = new List<string>();
+        long currentSize = 0;
+
+        foreach (var file in files)
+        {
+            long size = new FileInfo(file).Length;
+
+            if (currentSize + size > maxSize && currentGroup.Count > 0)
+            {
+                result.Add(currentGroup);
+                currentGroup = new List<string>();
+                currentSize = 0;
+            }
+
+            currentGroup.Add(file);
+            currentSize += size;
+        }
+
+        if (currentGroup.Count > 0)
+            result.Add(currentGroup);
+
+        return result;
+    }
+
+    static List<List<string>> GroupFilesBySize_Enumerable(IEnumerable<string> files, long maxSize)
+    {
+        var result = new List<List<string>>();
+        var currentGroup = new List<string>();
+        long currentSize = 0;
+
+        foreach (var file in files)
+        {
+            long size = new FileInfo(file).Length;
+
+            if (currentSize + size > maxSize && currentGroup.Count > 0)
+            {
+                result.Add(currentGroup);
+                currentGroup = new List<string>();
+                currentSize = 0;
+            }
+
+            currentGroup.Add(file);
+            currentSize += size;
+        }
+
+        if (currentGroup.Count > 0)
+            result.Add(currentGroup);
+
+        return result;
+    }
+
+    static List<List<string>> GroupFilesBySize_ParallelSmart(IEnumerable<string> files, long maxSize)
+    {
+        int logicalProcessors = Environment.ProcessorCount;
+        int parallelism = Math.Max(1, (int)(logicalProcessors * 0.75));
+
+        var fileSizeInfos = files.AsParallel()
+            .WithDegreeOfParallelism(parallelism)
+            .Select(file =>
+            {
+                try
+                {
+                    long size = new FileInfo(file).Length;
+                    return new { File = file, Size = size };
+                }
+                catch
+                {
+                    return null;
+                }
+            })
+            .Where(info => info != null);
+
+        var result = new List<List<string>>();
+        var currentGroup = new List<string>();
+        long currentSize = 0;
+
+        foreach (var info in fileSizeInfos)
+        {
+            if (currentSize + info.Size > maxSize && currentGroup.Count > 0)
+            {
+                result.Add(currentGroup);
+                currentGroup = new List<string>();
+                currentSize = 0;
+            }
+
+            currentGroup.Add(info.File);
+            currentSize += info.Size;
+        }
+
+        if (currentGroup.Count > 0)
+            result.Add(currentGroup);
+
+        return result;
+    }
