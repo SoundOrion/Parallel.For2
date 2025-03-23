@@ -223,3 +223,110 @@ var files = Directory.EnumerateFiles(sourceFolder, "*", SearchOption.TopDirector
 
 もっと応用編として、サブディレクトリ付きの再帰移動とか、ロック中ファイルのスキップとかも実装できるよ。  
 必要なら次いこっか？
+
+
+了解です！  
+つまり以下のようにしたいんですね：
+
+---
+
+### ✅ 要件まとめ：
+
+- **ファイルサイズの昇順ソートなし**
+- 順番通りに処理しながら
+- **合計サイズが32MB（例）を超えたら次のグループへ**
+- つまり「**32MBを超えたらグループを切る**」スタイル
+
+---
+
+### ✅ 対応コード（ソートなし・サイズ超えで分割）
+
+```csharp
+using System;
+using System.Collections.Generic;
+using System.IO;
+
+class Program
+{
+    static void Main()
+    {
+        string sourceFolder = @"C:\Users\Hatsuyama\Desktop\test";
+        string outputRoot = @"C:\Users\Hatsuyama\Desktop";
+        long maxGroupSize = 32L * 1024 * 1024; // 32MB
+
+        var files = Directory.EnumerateFiles(sourceFolder, "*", SearchOption.TopDirectoryOnly);
+        int groupIndex = 1;
+
+        foreach (var group in GroupFilesBySize_StreamCut(files, maxGroupSize))
+        {
+            string groupFolder = Path.Combine(outputRoot, $"Group_{groupIndex}");
+            Directory.CreateDirectory(groupFolder);
+
+            foreach (var file in group)
+            {
+                string destPath = Path.Combine(groupFolder, Path.GetFileName(file));
+                try
+                {
+                    File.Move(file, destPath);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Failed to move {file} → {destPath}: {ex.Message}");
+                }
+            }
+
+            Console.WriteLine($"Moved Group_{groupIndex}: {group.Count} files");
+            groupIndex++;
+        }
+
+        Console.WriteLine("Done.");
+    }
+
+    static IEnumerable<List<string>> GroupFilesBySize_StreamCut(IEnumerable<string> files, long maxSize)
+    {
+        var currentGroup = new List<string>();
+        long currentSize = 0;
+
+        foreach (var file in files)
+        {
+            long size;
+
+            try
+            {
+                size = new FileInfo(file).Length;
+            }
+            catch
+            {
+                continue; // ファイル情報取得できない場合はスキップ
+            }
+
+            if (currentSize > maxSize)
+            {
+                yield return currentGroup;
+                currentGroup = new List<string>();
+                currentSize = 0;
+            }
+
+            currentGroup.Add(file);
+            currentSize += size;
+        }
+
+        if (currentGroup.Count > 0)
+            yield return currentGroup;
+    }
+}
+```
+
+---
+
+### 🧠 この処理の特徴
+
+- **順番を維持して処理**（ファイル列挙順に依存）
+- **サイズが maxGroupSize を**「**超えたタイミング**」**で次のグループに切り替え**
+- ファイル1つが 32MB より大きくてもそのまま1グループとして扱われる（これは要件次第で変えられます）
+
+---
+
+もし「**32MB を超える前に止めたい（超えないようにしたい）**」という動きが良ければ、条件を `currentSize + size > maxSize` にすればOKです。変更希望あれば言ってください！
+
+どうします？超え「たら」か、超え「ないように」か。
