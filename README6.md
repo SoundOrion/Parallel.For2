@@ -318,3 +318,119 @@ static List<List<string>> GroupFilesBySize_ParallelSmart(IEnumerable<string> fil
 
 必要なら「ファイルサイズが極端に大きいファイルだけ別グループにしたい」みたいなチューニングもできるよ👌  
 もっと攻めた最適化もやってみる？
+
+
+おっ、鋭いね！その通り、**`ToList()` を省略することで一時的なメモリ使用量を減らせる可能性がある**よ。  
+でも、その後の処理に**依存**する部分もあるので、メリットと注意点をセットで解説するね👇
+
+---
+
+## ✅ 比較：`ToList()` あり vs なし
+
+### 1. `ToList()` **あり**（元の提案）
+
+```csharp
+var fileSizeInfos = files.AsParallel()
+    .WithDegreeOfParallelism(parallelism)
+    .Select(...)
+    .Where(...)
+    .ToList(); // ここで全結果を一括でメモリに格納
+```
+
+- 🔹 **メリット**:
+  - データが確定していて、**再利用（複数回列挙）できる**
+  - `.Sort()` などリスト専用メソッドが使える
+- 🔸 **デメリット**:
+  - 結果をすべてメモリに展開する（ピークメモリ使用量↑）
+
+---
+
+### 2. `ToList()` **なし**（あなたの提案）
+
+```csharp
+var fileSizeInfos = files.AsParallel()
+    .WithDegreeOfParallelism(parallelism)
+    .Select(...)
+    .Where(...); // IEnumerable を保持（遅延評価のまま）
+```
+
+- 🔹 **メリット**:
+  - 遅延評価で必要なタイミングまで評価されない
+  - **一括展開しないので、メモリピークを抑えやすい**
+- 🔸 **デメリット**:
+  - `.Sort()` などが使えない（`IEnumerable` に対してはソートできない）
+  - 複数回列挙すると再実行される（**毎回並列で再計算される**）
+  - 意図せず何度も列挙するとパフォーマンス逆効果
+
+---
+
+## ✅ 結論：どっちがいいの？
+
+| 条件 | おすすめ |
+|------|----------|
+| 一度だけ使って、順番不要 | `ToList()` なし（省メモリ）👌  
+| サイズ順にソートする or 再利用する | `ToList()` あり（必要）✅  
+| 複数回ループ回す | `ToList()` あり（遅延評価だと再実行されてコスト大）⚠️
+
+---
+
+## ✅ もし `Sort()` を使いたいけどメモリ効率も意識したいなら…
+
+```csharp
+var fileSizeInfos = files.AsParallel()
+    .WithDegreeOfParallelism(parallelism)
+    .Select(...)
+    .Where(info => info != null)
+    .OrderBy(info => info.Size); // ソートも遅延評価のまま行える
+```
+
+- これなら `.ToList()` を避けつつ**順序は保証**される
+- ただし、列挙するたびに `OrderBy` が再評価されるので、**1回しか使わない前提**にすべき
+
+---
+
+## ✅ 最終版例（低メモリ優先・1回使用限定）
+
+```csharp
+var fileSizeInfos = files.AsParallel()
+    .WithDegreeOfParallelism(parallelism)
+    .Select(file =>
+    {
+        try
+        {
+            long size = new FileInfo(file).Length;
+            return new { File = file, Size = size };
+        }
+        catch
+        {
+            return null;
+        }
+    })
+    .Where(info => info != null)
+    .OrderBy(info => info.Size); // ToList()せず、順序も保つ
+```
+
+これをそのまま `foreach` に流せば OK：
+
+```csharp
+foreach (var info in fileSizeInfos)
+{
+    // グルーピング処理...
+}
+```
+
+---
+
+## 🎯 まとめ
+
+- ✅ **一度きりで順序が必要なら `OrderBy` だけで OK**
+- ✅ **メモリ節約したいなら `ToList()` は避けた方が良い**
+- ⚠️ **何度も列挙する or ソート処理で必要なら `ToList()` は必須**
+
+---
+
+どっちのパターンにするかは、  
+「ソート必要？」「何回使う？」「最小メモリ？最大スピード？」って目的によるので、  
+要件に応じてスイッチできるようにするのもアリだね！
+
+必要なら「両対応できるように切り替えフラグ付きで書く」パターンも用意できるよ👌
