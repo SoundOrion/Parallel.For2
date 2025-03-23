@@ -139,3 +139,87 @@ while (File.Exists(destPath))
 
 試してみて、問題出たらすぐ直せるようにするよ！  
 たとえば：「サブフォルダごと対応したい」とか、「移動じゃなくコピーにしたい」とか、あれば教えて！
+
+
+めちゃくちゃ良い視点です！💯  
+そう、**ファイルを移動しながら同じフォルダを列挙してる**ときに「おかしなことが起きるのでは？」って疑問、すごく正しい。
+
+---
+
+## ✅ 結論：**基本的には安全だけど、状況によって注意が必要**
+
+### ✔️ 安全な理由（今回のコードの場合）
+
+- ファイルの列挙はこの1行で**最初に全部取得**してる：
+
+```csharp
+var files = Directory.EnumerateFiles(sourceFolder, "*", SearchOption.TopDirectoryOnly);
+```
+
+➡️ この `IEnumerable` は「遅延評価」だけど、`foreach` の前に `.ToArray()` や `.ToList()` にしておけば**列挙時に固定される**。  
+つまり、**移動が列挙に影響しない**。
+
+---
+
+## 😬 でも、次のようなケースは注意！
+
+### ❗ NG 例（安全じゃない）
+
+```csharp
+foreach (var file in Directory.EnumerateFiles(...))
+{
+    File.Move(file, ...); // ← 列挙中に対象フォルダの中を変えてる
+}
+```
+
+この場合、**列挙中に移動するとイテレータが壊れる可能性**があります。
+
+---
+
+## ✅ 対策：ファイル一覧を事前に確定させる
+
+```csharp
+var files = Directory.EnumerateFiles(sourceFolder, "*", SearchOption.TopDirectoryOnly).ToArray();
+```
+
+または
+
+```csharp
+var files = Directory.GetFiles(sourceFolder);
+```
+
+これで、**列挙結果がメモリ上に確定される**ので、  
+後からファイルを動かしても安全 ✅
+
+---
+
+## 🧠 遅延評価版と安全性の話
+
+| 方法 | 安全？ | 理由 |
+|------|--------|------|
+| `Directory.EnumerateFiles()`（そのまま使う） | ❌ 潜在的に危険 | フォルダが変わると列挙に影響あり |
+| `.ToArray()` / `.ToList()` で固定化 | ✅ 安全 | 列挙対象を最初にメモリに確保するため |
+| `GetFiles()`（全部先に取得） | ✅ 安全 | 同上（ただし遅延評価できない） |
+
+---
+
+## ✅ まとめ
+
+- ✔️ 今の実装でも `.ToArray()` を先に挟んでいれば OK
+- ⚠️ `Directory.EnumerateFiles(...).AsEnumerable()` をそのまま使ってるなら危険！
+- 💡 安全第一なら **最初にファイル一覧を配列化してから使うのが鉄則**
+
+---
+
+## 🔧 安全バージョン（改良）
+
+```csharp
+var files = Directory.EnumerateFiles(sourceFolder, "*", SearchOption.TopDirectoryOnly).ToArray();
+```
+
+これを使ってから `yield` すれば、安心して `File.Move()` していける！
+
+---
+
+もっと応用編として、サブディレクトリ付きの再帰移動とか、ロック中ファイルのスキップとかも実装できるよ。  
+必要なら次いこっか？
