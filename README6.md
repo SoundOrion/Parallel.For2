@@ -566,3 +566,105 @@ foreach (var info in fileSizeInfos)
 
         return result;
     }
+
+    ナイス！`yield return` 使えば、**グループ単位で遅延返却**できるから、
+
+- メモリ爆食いせずに済む
+- グループごとに「その場で処理」「逐次保存」とかも可能
+- ファイル数が**数百万件あっても現実的に動かせる設計**
+
+---
+
+## ✅ `yield return` バージョン
+
+```csharp
+static IEnumerable<List<string>> GroupFilesBySize_StreamYield(IEnumerable<string> files, long maxSize)
+{
+    var currentGroup = new List<string>();
+    long currentSize = 0;
+
+    foreach (var file in files)
+    {
+        long size;
+
+        try
+        {
+            size = new FileInfo(file).Length;
+        }
+        catch
+        {
+            continue; // アクセスできないファイルはスキップ
+        }
+
+        if (currentSize + size > maxSize && currentGroup.Count > 0)
+        {
+            yield return currentGroup;
+
+            currentGroup = new List<string>();
+            currentSize = 0;
+        }
+
+        currentGroup.Add(file);
+        currentSize += size;
+    }
+
+    if (currentGroup.Count > 0)
+    {
+        yield return currentGroup;
+    }
+}
+```
+
+---
+
+## ✅ 使用例
+
+```csharp
+var files = Directory.EnumerateFiles(@"C:\HugeFolder", "*", SearchOption.AllDirectories);
+long maxGroupSize = 1L * 1024 * 1024 * 1024; // 1GB
+
+foreach (var group in GroupFilesBySize_StreamYield(files, maxGroupSize))
+{
+    Console.WriteLine($"Group: {group.Count} files");
+
+    // ここで group を保存したりコピーしたり、即処理できる！
+    // 例: SaveGroup(group); MoveGroup(group); etc.
+}
+```
+
+---
+
+## ✅ メリットまとめ
+
+| 特徴 | 内容 |
+|------|------|
+| 遅延評価（yield） | グループができた瞬間に即返す |
+| 省メモリ | リスト全体を保持しない。1グループずつ処理可能 |
+| 柔軟性 | `foreach` 内で自由に保存・加工・UI表示などできる |
+| 巨大データ対応 | 数百万件、数GBでも安定動作しやすい構成 |
+
+---
+
+## 💡 応用アイデア
+
+- `yield return` の中で、グループの合計サイズやファイル名ログを出す
+- グループごとに `ZIP` 圧縮やフォルダ移動
+- 非同期で `await foreach` を使いたい場合は `IAsyncEnumerable` に拡張も可能
+
+---
+
+## 🔄 まとめ
+
+```csharp
+foreach (var group in GroupFilesBySize_StreamYield(...))
+{
+    // メモリに溜めずに、即処理
+}
+```
+
+このスタイル、**メモリ最強 & 拡張性抜群**なので、  
+本番処理にも安心して使える仕上がりになってる！
+
+---
+
+やってみる処理ある？たとえば「グループごとに zip 圧縮したい」とか「CSV に出力したい」とかあれば、それ向けに `foreach` の中を一緒に作れるよ📦💾
