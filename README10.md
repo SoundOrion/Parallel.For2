@@ -369,3 +369,167 @@ C#は.NET環境（.NET 6以降推奨）で動作しますが、アプリのCPU�
 - もし **Intelの最新CPU（第12世代以降）＋ Windows 11の環境を最大限活かしたい** 場合、 **.NET 6以降（.NET Coreベース）への移行を強く推奨します。**
 
 最新のCPUやOSの機能を最大限に活用することを考えると、今後は .NET 6以降がスタンダードになっていくことは明白であり、長期的にもパフォーマンス向上や保守性改善につながります。
+
+そう！まさにそこが重要ポイント。  
+**`async/await`の書き方は同じでも、裏側の実装（＝ランタイムの挙動）が全然違う**んです。
+
+---
+
+## 同じ書き方でも「中身が違う」例
+
+たとえばこのコード：
+
+```csharp
+public async Task DoWorkAsync()
+{
+    await Task.Delay(1000);
+    Console.WriteLine("Done");
+}
+```
+
+これ、.NET Frameworkでも.NET 6以降でも普通に動きますよね。でも…
+
+---
+
+## じゃあ何が違うの？って話：
+
+| 観点 | .NET Framework | .NET 6 / .NET 7 / .NET 8 |
+|------|----------------|--------------------------|
+| **ステートマシンの生成** | 古いC#コンパイラベース。最適化が少ない | より効率的なコード生成とILの最適化 |
+| **同期コンテキストの処理** | UIスレッド戻りが基本。`ConfigureAwait(false)`の効果が限定的な場面も | より明示的に制御可能、スレッド戻りの最適化あり |
+| **スレッドプール** | 固定的で、OS任せ。P/Eコアに無頓着 | 適応的なスレッドプール。Pコア/Eコア、スレッド優先度を考慮して割り当て |
+| **I/O最適化** | 古いWin32 APIラップ中心 | OSの最新I/O API（I/O Completion Ports、`io_uring`等）との連携向上 |
+| **Intel Thread Directorへの対応** | OS任せ。基本的に「無関心」 | OSのヒント（スレッド優先度など）を活用できる構造になっている |
+
+---
+
+## 実際にどう影響あるの？
+
+たとえば：
+
+- **I/Oが多いWeb APIサーバー** → 同じ`async`でも、.NET 6+なら**スレッド切り替えコストが激減**
+- **UIアプリで非同期処理中にCPU負荷が高い** → Thread Director＋Windows 11＋.NET 6+なら、**重いスレッドをPコアに任せつつUIスレッドを守れる**設計が実現しやすい
+- **バックグラウンド処理の多いWPFアプリ** → Eコアをうまく使って、省電力とレスポンスのバランスを保ちやすくなる
+
+---
+
+## まとめ
+
+> 🔧 **「書き方が同じ＝同じ動作」とは限らない。**  
+> 🎯 重要なのは「どのランタイムで、どんな環境（CPU・OS）で動かすか」
+
+だから今後の開発では、
+- `.NET 6/7/8` などの最新ランタイムを使う
+- 最新CPU（Intel第12世代以降）＋Windows 11の組み合わせを意識する
+のが、パフォーマンス的にも将来性としてもベスト！
+
+もし興味があれば、実際に.NET Frameworkと.NET 8で同じ非同期コードの動作を比較するミニベンチマークも一緒に作ろっか？
+
+
+了解！では、**.NET Framework vs .NET 8で同じ`async/await`コードを比較できるベンチマーク**を作ってみよう。
+
+---
+
+## 🎯 ベンチマークの目的
+
+- **同じ非同期処理（`Task`/`await`）でも、ランタイムごとに挙動やパフォーマンスに違いがあるか？**
+- スレッドの使われ方や、CPU使用率、完了時間にどんな違いが出るかを見る
+
+---
+
+## 🔧 準備（開発環境）
+
+| 条件 | 内容 |
+|------|------|
+| OS | Windows 11（Thread Director 有効） |
+| CPU | Intel 第12世代以降（例：i7-12700K） |
+| .NET Framework | 4.8 推奨 |
+| .NET 最新版 | .NET 8 SDK |
+| IDE | Visual Studio 2022（最新がベター） |
+
+---
+
+## 🧪 比較コード（共通のロジック）
+
+以下は「重めの計算処理」を`async/await`＋`Task`で並列実行し、完了までの時間を測るシンプルなベンチマーク。
+
+```csharp
+using System;
+using System.Diagnostics;
+using System.Threading.Tasks;
+
+class Program
+{
+    static async Task Main(string[] args)
+    {
+        var sw = Stopwatch.StartNew();
+
+        var tasks = new Task[Environment.ProcessorCount];
+
+        for (int i = 0; i < tasks.Length; i++)
+        {
+            tasks[i] = Task.Run(() => SimulateHeavyWork());
+        }
+
+        await Task.WhenAll(tasks);
+
+        sw.Stop();
+        Console.WriteLine($"Done in {sw.ElapsedMilliseconds}ms");
+    }
+
+    static void SimulateHeavyWork()
+    {
+        // CPUを使う重めの計算（フェイクワークロード）
+        double value = 0;
+        for (int i = 0; i < 100_000_000; i++)
+        {
+            value += Math.Sqrt(i);
+        }
+    }
+}
+```
+
+---
+
+## 🧪 実行方法
+
+### プロジェクト1（.NET Framework）
+1. Visual Studioで「.NET Framework Console App（v4.8）」を作成
+2. 上記コードを貼り付けて実行
+
+### プロジェクト2（.NET 8）
+1. Visual Studioで「.NET 8 Console App」を作成
+2. 同じコードを貼り付けて実行
+
+---
+
+## 🔍 比較すべきポイント
+
+| 観点 | どうチェックする？ |
+|------|------------------|
+| 実行時間（ms） | `Console.WriteLine`で出力された時間を比較 |
+| CPU使用率 | タスクマネージャーや [Process Explorer](https://learn.microsoft.com/en-us/sysinternals/downloads/process-explorer) で確認 |
+| スレッドの割り当て | Visual Studioのデバッグ →「スレッド」ウィンドウを使う |
+| タスクの分散状況 | Intel VTuneや Windows Performance Recorder（WPR）でもっと詳しく確認も可（上級者向け） |
+
+---
+
+## 📈 期待される結果（例）
+
+| ランタイム | 予想される傾向 |
+|------------|----------------|
+| .NET Framework | 時間がやや長い。スレッド割り当てが固定的 |
+| .NET 8 | より短い時間で完了。Pコア優先で使われる可能性大。Thread Directorの恩恵あり |
+
+---
+
+## ✅ 補足：Pコア/Eコアの動きが見たいとき
+
+タスクマネージャー（詳細ビュー） → 「パフォーマンス」タブ → 「CPU」表示 →「論理プロセッサを表示」  
+→ ここで、PコアとEコアの使用率が見分けられる！
+
+---
+
+作ってみて実行したら、**どっちが速かったか・どのくらい違ったか**教えてくれたら嬉しい！
+
+必要なら**VTuneでの詳しい見方**や、**UIアプリ版（WPF）ベンチマーク**も用意できるよ。やってみる？
