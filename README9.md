@@ -447,3 +447,48 @@ class Program
 
 どう？これで「**安全に並列化しつつ、sourceFolderは逐次排他使用**」が完璧にできる構成になったよ。  
 もしもう1段レベルアップ（ログ書き出し・中断再開・リトライ機能）も欲しければ遠慮なく！
+
+
+OK！PowerShellで**自分のPCのコア数**を確認する方法を紹介します。めっちゃ簡単です。
+
+---
+
+### 🔍 **物理コア数の確認（CPUの本物のコア数）**
+
+```powershell
+(Get-WmiObject -Class Win32_Processor).NumberOfCores
+```
+
+---
+
+### 🔍 **論理コア数（スレッド数、HT込みの数）**
+
+```powershell
+(Get-WmiObject -Class Win32_Processor).NumberOfLogicalProcessors
+```
+
+🧠 補足：
+- 例：6コア12スレッドのCPUなら  
+  - `NumberOfCores` → 6  
+  - `NumberOfLogicalProcessors` → 12  
+
+---
+
+### ✅ **両方まとめて確認するスクリプト**
+
+```powershell
+Get-WmiObject -Class Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors
+```
+
+出力例：
+```
+Name                             NumberOfCores NumberOfLogicalProcessors
+----                             ------------- -------------------------
+Intel(R) Core(TM) i7-9700K CPU           8                       8
+```
+
+（この例はHyper-Threadingなしの8コアCPU）
+
+---
+
+必要なら、CPUの名前や詳細情報を含めた確認方法とか、もっとカスタマイズした出力も作れますよ。興味ある？
